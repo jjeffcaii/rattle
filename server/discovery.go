@@ -1,8 +1,7 @@
-package internal
+package server
 
 import (
 	"errors"
-	"io/ioutil"
 	"log"
 	"sort"
 	"sync"
@@ -36,7 +35,7 @@ func (n *Node) Start() error {
 	c := memberlist.DefaultLocalConfig()
 	c.BindPort = n.port
 	c.Name = n.id
-	c.LogOutput = ioutil.Discard
+	//c.LogOutput = ioutil.Discard
 	m, err := memberlist.Create(c)
 	if err != nil {
 		return err

@@ -1,6 +1,4 @@
-package pkg
-
-type Method string
+package rattle
 
 const (
 	HEAD   Method = "HEAD"
@@ -11,9 +9,12 @@ const (
 	DELETE        = "DELETE"
 )
 
+type Handler func(c *Context) error
+
+type Method string
+
 type Routing struct {
 	Domain string
 	Method Method
 	Path   string
 }
-

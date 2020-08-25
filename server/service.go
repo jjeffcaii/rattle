@@ -1,18 +1,23 @@
-package rattle
+package server
 
 import (
-	"github.com/jjeffcaii/rattle/pkg"
+	"context"
+
+	"github.com/jjeffcaii/rattle"
+	"github.com/pkg/errors"
 	"github.com/rsocket/rsocket-go"
 	"github.com/rsocket/rsocket-go/balancer"
 	"github.com/rsocket/rsocket-go/payload"
 	"github.com/rsocket/rsocket-go/rx/mono"
 )
 
+var errServerNotAvailable = errors.New("server is not available")
+
 type ServiceFactory struct {
 	store *balancer.Group
 }
 
-func (s *ServiceFactory) Register(socket rsocket.Client, routing *pkg.Routing, others ...*pkg.Routing) (err error) {
+func (s *ServiceFactory) Register(socket rsocket.Client, routing *rattle.Routing, others ...*rattle.Routing) (err error) {
 	s.registerOne(socket, routing)
 	for _, it := range others {
 		s.registerOne(socket, it)
@@ -25,21 +30,24 @@ func (s *ServiceFactory) Request(req payload.Payload) mono.Mono {
 	if !ok {
 		return mono.Error(errBadRequest)
 	}
-	routing, err := pkg.ParseRouting(m)
+	routing, err := rattle.ParseRouting(m)
 	if err != nil {
 		return mono.Error(err)
 	}
 
 	sid := s.toServiceID(routing)
-	next := s.store.Get(sid).Next()
+	next, ok := s.store.Get(sid).Next(context.Background())
+	if !ok {
+		return mono.Error(errServerNotAvailable)
+	}
 	return next.RequestResponse(req)
 }
 
-func (s *ServiceFactory) toServiceID(routing *pkg.Routing) string {
+func (s *ServiceFactory) toServiceID(routing *rattle.Routing) string {
 	return routing.Domain
 }
 
-func (s *ServiceFactory) registerOne(socket rsocket.Client, routing *pkg.Routing) {
+func (s *ServiceFactory) registerOne(socket rsocket.Client, routing *rattle.Routing) {
 	s.store.Get(s.toServiceID(routing)).Put(socket)
 }
 

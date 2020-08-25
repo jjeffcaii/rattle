@@ -2,98 +2,84 @@ package rattle
 
 import (
 	"context"
-	"fmt"
+	"sync"
 
-	"github.com/jjeffcaii/rattle/internal"
 	"github.com/pkg/errors"
 	"github.com/rsocket/rsocket-go"
-	"github.com/rsocket/rsocket-go/extension"
-	"github.com/rsocket/rsocket-go/payload"
-	"github.com/rsocket/rsocket-go/rx"
-	"github.com/rsocket/rsocket-go/rx/flux"
-	"github.com/rsocket/rsocket-go/rx/mono"
-)
-
-var (
-	errBadSetup   = errors.New("bad setup")
-	errBadRequest = errors.New("bad request")
-	errNoProvider = errors.New("no such service")
+	"go.uber.org/atomic"
 )
 
 type Config struct {
-	ID        string
-	Port      int
-	Discovery struct {
-		Seeds []string
-		Port  int
-	}
+	Namespace string
+	Token     string
+	Bootstrap string
 }
 
 type Rattle struct {
-	port    int
-	node    *internal.Node
-	factory *ServiceFactory
+	mu      sync.RWMutex
+	c       *Config
+	router  *Router
+	started *atomic.Bool
+	client  rsocket.CloseableRSocket
+	done    chan struct{}
 }
 
-type Responder struct {
-	repo *ServiceFactory
+func (r *Rattle) Close() (err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	select {
+	case <-r.done:
+		// already closed
+		break
+	default:
+		close(r.done)
+		if r.client == nil {
+			break
+		}
+		err = r.client.Close()
+	}
+	return
 }
 
-func (r *Responder) FireAndForget(message payload.Payload) {
-	panic("implement me")
+func (r *Rattle) GET(path string, h Handler) error {
+	return r.router.Route(GET, path, h)
 }
 
-func (r *Responder) MetadataPush(message payload.Payload) {
-	panic("implement me")
+func (r *Rattle) Request(domain string) *Requester {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return &Requester{
+		ns: domain,
+		c:  r.client,
+	}
 }
 
-func (r *Responder) RequestResponse(message payload.Payload) mono.Mono {
-	return r.repo.Request(message)
-}
+func (r *Rattle) Start(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-func (r *Responder) RequestStream(message payload.Payload) flux.Flux {
-	panic("implement me")
-}
-
-func (r *Responder) RequestChannel(messages rx.Publisher) flux.Flux {
-	panic("implement me")
-}
-
-func (r *Rattle) Serve(ctx context.Context) (err error) {
-	err = r.node.Start()
-	if err != nil {
-		return
+	if r.client != nil {
+		return errors.New("rattle: already started")
 	}
 
-	responder := &Responder{
-		repo: r.factory,
-	}
-	err = rsocket.Receive().
-		Acceptor(func(setup payload.SetupPayload, sendingSocket rsocket.CloseableRSocket) (rsocket.RSocket, error) {
-			if setup.MetadataMimeType() != extension.MessageCompositeMetadata.String() {
-				return nil, errBadSetup
-			}
-			return responder, nil
+	client, err := rsocket.Connect().
+		Acceptor(func(socket rsocket.RSocket) rsocket.RSocket {
+			return NewRouteResponder(r.router)
 		}).
-		Transport(fmt.Sprintf("tcp://0.0.0.0:%d", r.port)).
-		Serve(ctx)
-	return
+		Transport(rsocket.TCPClient().SetAddr(r.c.Bootstrap).Build()).
+		Start(ctx)
+	if err != nil {
+		return err
+	}
+	r.client = client
+	return nil
 }
 
-type Matcher interface {
-	Match(path string) bool
-}
-
-func NewRattle(c *Config) (r *Rattle, err error) {
-	if c == nil {
-		err = errors.New("no config found")
-		return
-	}
-	node := internal.NewNode(c.ID, c.Discovery.Port, c.Discovery.Seeds)
-	r = &Rattle{
-		port:    c.Port,
-		node:    node,
-		factory: NewServiceFactory(),
-	}
-	return
+func NewRattle(c *Config) (*Rattle, error) {
+	return &Rattle{
+		c:      c,
+		router: NewRouter(),
+		done:   make(chan struct{}),
+	}, nil
 }

@@ -1,4 +1,4 @@
-package pkg
+package rattle
 
 import (
 	"github.com/pkg/errors"
@@ -11,6 +11,10 @@ var (
 )
 
 func ParseRouting(metadata []byte) (routing *Routing, err error) {
+	if metadata == nil || len(metadata) < 1 {
+		err = errNoRouting
+		return
+	}
 	scanner := extension.NewCompositeMetadataBytes(metadata).Scanner()
 	var (
 		m    string
